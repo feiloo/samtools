@@ -89,8 +89,40 @@ static int bam_fillmd1_core(const char *ref_name, bam1_t *b, char *ref,
         return 0;
     }
 
+
     for (i = qpos = 0, rpos = c->pos; i < c->n_cigar; ++i) {
         int j, oplen = cigar[i]>>4, op = cigar[i]&0xf;
+	
+	// collect phred-likelihood for uq-tags
+	// mypatch
+	int qualsum = 0;
+	if (op == BAM_CDIFF) {
+	    //todo: sum ref quals here for "segment"
+	    uint8_t *qual = bam_get_qual(b);
+            for (j = 0; j < oplen; ++j) {
+		qualsum += qual[j];
+	    }
+
+	    uint8_t *old_uq = bam_aux_get(b, "UQ");
+	    int old_uq_i = -1;
+
+	    if (old_uq) {
+		old_uq_i = bam_aux2i(old_uq);
+	    }
+	    if (!old_uq) {
+		if (bam_aux_append(b, "UQ", 'i', 4, (uint8_t*)&qualsum) < 0)
+		    goto aux_fail;
+	    }
+	    else if (qualsum != old_uq_i) {
+		if (!quiet_mode) {
+		    fprintf(stderr, "[bam_fillmd1] different UQ for read '%s': %d -> %d\n", bam_get_qname(b), old_uq_i, qualsum);
+		}
+		if (bam_aux_del(b, old_uq) < 0) goto aux_fail;
+		if (bam_aux_append(b, "UQ", 'i', 4, (uint8_t*)&qualsum) < 0)
+		    goto aux_fail;
+	    }
+	}
+
         if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) {
             for (j = 0; j < oplen; ++j) {
                 int c1, c2, z = qpos + j;
@@ -131,6 +163,8 @@ static int bam_fillmd1_core(const char *ref_name, bam1_t *b, char *ref,
         print_error_errno("calmd", "Couldn't build new MD string");
         goto fail;
     }
+    // todo: write  apply_uq_tag here
+    
     // apply max_nm
     if (max_nm > 0 && nm >= max_nm) {
         for (i = qpos = 0, rpos = c->pos; i < c->n_cigar; ++i) {
